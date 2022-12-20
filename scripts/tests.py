@@ -16,9 +16,11 @@ else:
 def collate_fn(batch):
     return tuple(zip(*batch))
 
-data_transforms = {'train': torchvision.transforms.Compose([torchvision.transforms.ToTensor()]),
-                    'val': torchvision.transforms.Compose([torchvision.transforms.ToTensor()]),
-                    'test': torchvision.transforms.Compose([torchvision.transforms.ToTensor()])}
+img_transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),])
+
+data_transforms = {'train': img_transform,
+                    'val': img_transform,
+                    'test': img_transform}
 
 dataset_path = 'dataset/'
 img_path = dataset_path + 'images'
@@ -49,8 +51,8 @@ data_test = VDDataset(img_dir=img_path,
 
 classes = data_train.classes
 num_classes = len(classes)
-num_workers = 2
-size_batch = 2
+num_workers = 1
+size_batch = 1
 
 loader_train = torch.utils.data.DataLoader(data_train, 
                                               batch_size=size_batch, 
@@ -78,6 +80,6 @@ model.to(device)
 name_train = "retina_resnet34"
 lr = 1e-4
 num_epochs = 1
-tags = ['RetinaNet','resnet34']
+tags = ['RetinaNet','resnet34',]
 
 execute(name_train, model, lr, num_epochs, loader_train, loader_val, loader_test, device, tags, log_wandb=False)

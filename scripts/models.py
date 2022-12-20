@@ -30,8 +30,8 @@ def retina_net(num_classes):
     retina_net = RetinaNet(retina_backbone, 
                             num_classes, 
                             anchor_generator=anchor_generator,
-                            min_size=800,
-                            max_size=1333)
+                            min_size=874,
+                            max_size=1858)
 
     return retina_net
 
@@ -45,8 +45,7 @@ def fasterrcnn (num_classes):
     sizes_anchors = ((8, 10, 12), 
                     (16, 20, 25), 
                     (32, 40, 50), 
-                    (64, 80, 101), 
-                    (128, 161, 203))
+                    (64, 80, 101))
 
     # Ratio = height / width for an anchor
     ratios_anchors = ((0.5, 1.0, 2.0),) * len(sizes_anchors)
@@ -57,8 +56,8 @@ def fasterrcnn (num_classes):
 
     faster_rcnn = FasterRCNN(standard_backbone,
                             num_classes=num_classes,
-                            anchor_generator=anchor_generator,
-                            min_size=800,
-                            max_size=1333)
+                            rpn_anchor_generator=anchor_generator,
+                            min_size=874,
+                            max_size=1858)
 
     return faster_rcnn

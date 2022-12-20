@@ -35,6 +35,12 @@ def get_image_annotations(img_file: str, label_file: str):
     df_img = df[df['file'] == img_file]
     return df_img['label'], df_img[['x1','y1','x2','y2']]
 
+def get_random_crop(img: torch.tensor, size: int):
+    _, h, w = img.shape
+    x = torch.randint(low=0, high=h-size, size=(1,)).item()
+    y = torch.randint(low=0, high=w-size, size=(1,)).item()
+    return x, y
+
 class VDDataset(Dataset):
     def __init__(
         self,
@@ -65,13 +71,17 @@ class VDDataset(Dataset):
 
         boxes = torch.as_tensor(boxes.values, dtype=torch.float32)
         labels = torch.as_tensor(labels.values, dtype=torch.int64)
-
-
-        reduced_size = 100
+        
         if self.transforms is not None:
-            image = self.transforms(image)[:,:reduced_size,:reduced_size]
-        boxes = boxes[torch.all(boxes<reduced_size,dim=1).nonzero()[:,0]]
-        labels = labels[torch.all(boxes<reduced_size,dim=1).nonzero()[:,0]]
+            reduced_size = 500
+            image = self.transforms(image)
+            x, y = get_random_crop(image, reduced_size)
+            image = image[:,x:x+reduced_size, y:y+reduced_size]
+            filters = [(b[0]>=x and b[0]<x+reduced_size and b[2]>=x and b[2]<x+reduced_size
+            and b[1]>=y and b[1]<y+reduced_size and b[3]>=y and b[3]<y+reduced_size) for b in boxes]
+            boxes = boxes[filters]
+            labels = labels[filters]
+
         target = {"boxes": boxes, "labels": labels}
 
         return image, target
@@ -102,9 +112,8 @@ def train(model: nn.Module,
     size_ds_train = len(train_loader.dataset)
     num_batches = len(train_loader)    
 
-    losses_class = []
-    losses_box = []
-    losses_sum = []
+    losses = []
+    loss_names = []
     model.train()
     for idx_batch, (images, targets) in enumerate(train_loader):
         optimizer.zero_grad()
@@ -112,19 +121,21 @@ def train(model: nn.Module,
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         loss_dict = model(images, targets)
+        if idx_batch == 0:
+            losses = [0.0] * len(loss_dict)
+            loss_names = list(loss_dict.keys())
         
-        loss_class = loss_dict['classification']
-        loss_boxes_regr = loss_dict['bbox_regression']
-        loss_sum = loss_class + loss_boxes_regr
-        losses_class.append(loss_class)
-        losses_box.append(loss_boxes_regr)
-        losses_sum.append(loss_sum)
+        loss_sum = 0
+        for i, loss in enumerate(loss_dict.values()):
+            loss_sum += loss
+            losses[i] += loss
         loss_sum.backward()
         optimizer.step()
 
-    dict_losses_train = {'bbox_regression': sum(losses_box)/num_batches,
-                         'classification': sum(losses_class)/num_batches,
-                         'sum': sum(losses_sum)/num_batches}
+    dict_losses_train = {}
+    for idx, name in enumerate(loss_names):
+        dict_losses_train[name] = losses[idx]/num_batches
+
     return dict_losses_train
 
 def evaluate(model: nn.Module,
@@ -134,25 +145,25 @@ def evaluate(model: nn.Module,
 
     num_batches = len(val_loader)
 
-    losses_class = []
-    losses_box = []
-    losses_sum = []
+    losses = []
+    loss_names = []
     model.train()
     with torch.no_grad():
-        for idx_bathc, (images, targets) in enumerate(val_loader):
+        for idx_batch, (images, targets) in enumerate(val_loader):
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
             loss_dict = model(images, targets)
-            loss_class = loss_dict['classification']
-            loss_boxes_regr = loss_dict['bbox_regression']
-            loss_sum = loss_class + loss_boxes_regr
-            losses_class.append(loss_class)
-            losses_box.append(loss_boxes_regr)
-            losses_sum.append(loss_sum)
+            if idx_batch == 0:
+                losses = [0.0] * len(loss_dict)
+                loss_names = list(loss_dict.keys())
+            loss_sum = 0
+            for i, loss in enumerate(loss_dict.values()):
+                loss_sum += loss
+                losses[i] += loss
 
-    dict_losses_val = {'bbox_regression': sum(losses_box)/num_batches,
-                         'classification': sum(losses_class)/num_batches,
-                         'sum': sum(losses_sum)/num_batches}
+    dict_losses_val = {}
+    for idx, name in enumerate(loss_names):
+        dict_losses_val[name] = losses[idx]/num_batches
     return dict_losses_val
 
 def training_loop(num_epochs: int,
@@ -184,36 +195,24 @@ def training_loop(num_epochs: int,
     """    
     loop_start = timer()
 
-    losses_train_bb = []
-    losses_train_class = []
-    losses_train_sum = []
     print("STARTING TRAINING")
     for epoch in range(1, num_epochs + 1):
         time_start = timer()
         losses_epoch_train = train(model, loader_train, device, 
                                    optimizer, epoch)
         
-        loss_bb = losses_epoch_train['bbox_regression']
-        losses_train_bb.append(loss_bb)
-        loss_class = losses_epoch_train['classification']
-        losses_train_class.append(loss_class)
-        loss_sum = losses_epoch_train['sum']
-        losses_train_sum.append(loss_sum)
-
         losses_epoch_val = evaluate(model, loader_val, device, epoch)
 
-        loss_bb_val = losses_epoch_val['bbox_regression']
-        loss_class_val = losses_epoch_val['classification']
-        loss_sum_val = losses_epoch_val['sum']
-
         if log_wandb:
-            wandb.log({'train/loss_bb': loss_bb,
-                        'train/loss_class': loss_class,
-                        'train/loss_sum': loss_sum,
-                        'val/loss_bb': loss_bb_val,
-                        'val/loss_class': loss_class_val,
-                        'val/loss_sum': loss_sum_val})
+            loss_names = list(losses_epoch_train.keys())
+            loss_log = {}
+            train_loss = list(losses_epoch_train.values())
+            val_loss = list(losses_epoch_val.values())
+            for i, name in enumerate(loss_names):
+                loss_log['train/'+name] = train_loss[i]
+                loss_log['val/'+name] = val_loss[i]
 
+            wandb.log(loss_log)
 
         time_end = timer()
 
@@ -222,8 +221,8 @@ def training_loop(num_epochs: int,
         if verbose:            
             print(f'Epoch: {epoch} '
                   f' Lr: {lr:.8f} '
-                  f' Losses Train: Sum = [{loss_sum:.4f}] Class = [{loss_class:.4f}] Boxes = [{loss_bb:.4f}]' 
-                  f' Losses Val: Sum = [{loss_sum_val:.4f}] Class = [{loss_class_val:.4f}] Boxes = [{loss_bb_val:.4f}]'                  
+                  f' Losses Train: {losses_epoch_train.items()} ' 
+                  f' Losses Val: {losses_epoch_val.items()} '                  
                   f' Time one epoch (s): {(time_end - time_start):.4f} ')
         
         if lr_scheduler:            
@@ -247,9 +246,8 @@ def evaluate_test(model: nn.Module,
             predictions = model(images)
             metric.update(predictions, targets)
         
-        map = metric.compute()['map']
-
-        print(f"Mean Average Precision (mAP) = {map}")
+        map = metric.compute()
+        return map
 
 def execute(name_train: str, 
             model: nn.Module, 
@@ -274,18 +272,15 @@ def execute(name_train: str,
     if log_wandb:
         run = wandb.init(project="vehicle-detectin", tags=tags, config={
             'learning_rate': starting_lr, 'epoch': num_epochs, 'device': device})
-        wandb.define_metric('train/loss_bb', summary='min')
-        wandb.define_metric('train/loss_class', summary='min')
-        wandb.define_metric('train/loss_sum', summary='min')
-        wandb.define_metric('val/loss_bb', summary='min')
-        wandb.define_metric('val/loss_class', summary='min')
-        wandb.define_metric('val/loss_sum', summary='min')
+        wandb.define_metric('test/mAP', summary='max')
+        wandb.define_metric('test/mAP_small', summary='max')
+        wandb.define_metric('test/mAP_medium', summary='max')
+        wandb.define_metric('test/mAP_large', summary='max')
+        wandb.define_metric('test/mAP_class', summary='max')
         wandb.watch(model)
 
     fix_random(42)
 
-    log_dir = os.path.join('logs', name_train)
-    
     # Optimization
     optimizer = optim.Adam(model.parameters(), lr=starting_lr)    
 
@@ -296,9 +291,13 @@ def execute(name_train: str,
                                model, data_loader_train, 
                                data_loader_val, device, log_wandb=log_wandb)
     
-    evaluate_test(model, data_loader_test, device)
-
+    map = evaluate_test(model, data_loader_test, device)
     if log_wandb:
+        wandb.log({'test/mAP': map['map'],
+                    'test/mAP_small': map['map_small'],
+                    'test/mAP_medium': map['map_medium'],
+                    'test/mAP_large': map['map_large'],
+                    'test/mAP_class': map['map_per_class']})
         run.finish()
 
     # Save the model    

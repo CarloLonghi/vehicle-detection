@@ -1,7 +1,4 @@
-from pycocotools.coco import COCO
 import numpy as np
-import skimage.io as io
-from matplotlib import pyplot as plt
 import json
 import pandas as pd
 from sklearn.model_selection import train_test_split
