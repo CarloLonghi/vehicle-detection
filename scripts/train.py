@@ -13,6 +13,7 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 import wandb
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
+import models
 
 def fix_random(seed: int) -> None:
     """Fix all the possible sources of randomness.
@@ -73,7 +74,7 @@ class VDDataset(Dataset):
         labels = torch.as_tensor(labels.values, dtype=torch.int64)
         
         if self.transforms is not None:
-            reduced_size = 500
+            reduced_size = 100
             image = self.transforms(image)
             x, y = get_random_crop(image, reduced_size)
             image = image[:,x:x+reduced_size, y:y+reduced_size]
@@ -166,7 +167,8 @@ def evaluate(model: nn.Module,
         dict_losses_val[name] = losses[idx]/num_batches
     return dict_losses_val
 
-def training_loop(num_epochs: int,
+def training_loop(name_train: str,
+                  num_epochs: int,
                   optimizer: torch.optim, 
                   lr_scheduler: torch.optim.lr_scheduler,
                   model: nn.Module, 
@@ -194,7 +196,8 @@ def training_loop(num_epochs: int,
             the model trained 
     """    
     loop_start = timer()
-
+    best_loss = None
+    increasing_loss = 0
     print("STARTING TRAINING")
     for epoch in range(1, num_epochs + 1):
         time_start = timer()
@@ -203,17 +206,33 @@ def training_loop(num_epochs: int,
         
         losses_epoch_val = evaluate(model, loader_val, device, epoch)
 
+        train_loss = list(losses_epoch_train.values())
+        val_loss = list(losses_epoch_val.values())
+
         if log_wandb:
             loss_names = list(losses_epoch_train.keys())
             loss_log = {}
-            train_loss = list(losses_epoch_train.values())
-            val_loss = list(losses_epoch_val.values())
             for i, name in enumerate(loss_names):
                 loss_log['train/'+name] = train_loss[i]
                 loss_log['val/'+name] = val_loss[i]
 
             wandb.log(loss_log)
 
+        total_loss = sum(val_loss)
+        if best_loss is None:
+            best_loss = total_loss
+            if not os.path.exists('checkpoints'):
+                os.makedirs('checkpoints')
+            path_checkpoint = os.path.join('checkpoints', f'{name_train}_checkpoint.bin')
+            torch.save(model.state_dict(), path_checkpoint)
+        if total_loss < best_loss:
+            increasing_loss = 0
+            # Save model checkpoint    
+            path_checkpoint = os.path.join('checkpoints', f'{name_train}_checkpoint.bin')
+            torch.save(model.state_dict(), path_checkpoint)
+        else:
+            increasing_loss += 1
+        
         time_end = timer()
 
         lr = optimizer.param_groups[0]['lr']
@@ -228,6 +247,10 @@ def training_loop(num_epochs: int,
         if lr_scheduler:            
             lr_scheduler.step()
     
+        if increasing_loss >=5:
+            print('Early Stopping')
+            break
+
     loop_end = timer()
     time_loop = loop_end - loop_start
     if verbose:
@@ -239,7 +262,7 @@ def evaluate_test(model: nn.Module,
 
     model.eval()
     with torch.no_grad():
-        metric = MeanAveragePrecision()
+        metric = MeanAveragePrecision(class_metrics=True)
         for idx_bathc, (images,targets) in enumerate(test_loader):
             images = list(image.to(device) for image in images)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -287,23 +310,18 @@ def execute(name_train: str,
     # Learning Rate schedule 
     scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
-    training_loop(num_epochs, optimizer, scheduler, 
+    training_loop(name_train, num_epochs, optimizer, scheduler, 
                                model, data_loader_train, 
                                data_loader_val, device, log_wandb=log_wandb)
-    
+                               
+    # load best parameters
+    model.load_state_dict(torch.load('checkpoints/'+name_train+'_checkpoint.bin'))
+
     map = evaluate_test(model, data_loader_test, device)
     if log_wandb:
         wandb.log({'test/mAP': map['map'],
                     'test/mAP_small': map['map_small'],
                     'test/mAP_medium': map['map_medium'],
-                    'test/mAP_large': map['map_large'],
-                    'test/mAP_class': map['map_per_class']})
+                    'test/mAP_large': map['map_large'],})
+        print(map['map_per_class'])
         run.finish()
-
-    # Save the model    
-    if not os.path.exists('checkpoints'):
-        os.makedirs('checkpoints')
-    
-    path_checkpoint = os.path.join('checkpoints',
-                                   f'{name_train}_{num_epochs}_epochs.bin')
-    torch.save(model.state_dict(), path_checkpoint)
