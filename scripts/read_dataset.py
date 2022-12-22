@@ -19,12 +19,12 @@ def convert_coco_json_to_csv(filename):
     test_out = open(test_out_file, 'w')
     test_out.write('id,file,x1,y1,x2,y2,label\n')
 
-    all_imgs = {}
+    img_ids = []
     for im in s['images']:
-        all_imgs[im['id']] = str(im['file_name']).replace(' ', '_')
+        img_ids.append(im['id'])
     
     # define train, validation and test splits
-    ids = np.array(list(all_imgs.keys()))
+    ids = np.array(img_ids)
     train_ids, val_ids = train_test_split(ids, train_size=70)
     val_ids, test_ids = train_test_split(val_ids, train_size=10)
 
@@ -34,22 +34,38 @@ def convert_coco_json_to_csv(filename):
         categories[cat['id']] = num_cat
         num_cat += 1
 
-    all_ids_ann = []
+    ids_img_ann = {}
     for ann in s['annotations']:
-        image_id = ann['image_id']
-        all_ids_ann.append(image_id)
-        x1 = ann['bbox'][0]
-        x2 = ann['bbox'][0] + ann['bbox'][2]
-        y1 = ann['bbox'][1]
-        y2 = ann['bbox'][1] + ann['bbox'][3]
-        label = categories[ann['category_id']]
-        if image_id in train_ids:
-            out = train_out
-        elif image_id in val_ids:
-            out = val_out
+        img_id = ann['image_id']
+        if img_id not in ids_img_ann.keys():
+            ids_img_ann[img_id] = [ann['id'],]
         else:
+            ann_ids = ids_img_ann[img_id]
+            ann_ids.append(ann['id'])
+            ids_img_ann[img_id] = ann_ids
+    
+    total_anns = 0
+    for img in s['images']:
+        img_id = img['id']
+        if img_id in train_ids:
+            out = train_out
+        elif img_id in val_ids:
+            out = val_out
+        elif img_id in test_ids:
             out = test_out
-        out.write('{},{},{},{},{},{},{}\n'.format(image_id,all_imgs[image_id], x1, y1, x2, y2, label))
+        img_file = str(img['file_name']).replace(' ', '_')
+        anns = ids_img_ann[img_id]
+        total_anns += len(anns)
+        for ann_id in anns:
+            ann = s['annotations'][ann_id-1]
+            x1 = ann['bbox'][0]
+            x2 = ann['bbox'][0] + ann['bbox'][2]
+            y1 = ann['bbox'][1]
+            y2 = ann['bbox'][1] + ann['bbox'][3]
+            label = categories[ann['category_id']]
+            out.write('{},{},{},{},{},{},{}\n'.format(img_id,img_file, x1, y1, x2, y2, label))
+
+    print(total_anns)
 
 
 convert_coco_json_to_csv('dataset/labels.json')
