@@ -13,7 +13,6 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 import wandb
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
-import models
 
 def fix_random(seed: int) -> None:
     """Fix all the possible sources of randomness.
@@ -174,6 +173,7 @@ def training_loop(name_train: str,
                   model: nn.Module, 
                   loader_train: utils.data.DataLoader, 
                   loader_val: utils.data.DataLoader,
+                  loader_test: utils.data.DataLoader,
                   device, 
                   verbose: bool=True,
                   log_wandb: bool=False,) -> Dict[str, List[float]]:
@@ -208,6 +208,8 @@ def training_loop(name_train: str,
 
         train_loss = list(losses_epoch_train.values())
         val_loss = list(losses_epoch_val.values())
+        map_test = evaluate_test(model, loader_test, device)
+        map_train = evaluate_test(model, loader_train, device)
 
         if log_wandb:
             loss_names = list(losses_epoch_train.keys())
@@ -215,6 +217,19 @@ def training_loop(name_train: str,
             for i, name in enumerate(loss_names):
                 loss_log['train/'+name] = train_loss[i]
                 loss_log['val/'+name] = val_loss[i]
+
+            loss_log['test/mAP'] = map_test['map']
+            loss_log['test/mAP_small'] = map_test['map_small']
+            loss_log['test/mAP_medium'] = map_test['map_medium']
+            loss_log['test/mAP_large'] = map_test['map_large']
+            loss_log['test/mAR_small'] = map_test['mar_small']
+            loss_log['test/mAR_medium'] = map_test['mar_medium']
+            loss_log['test/mAR_large'] = map_test['mar_large']
+
+            loss_log['train/mAP'] = map_train['map']
+            loss_log['train/mAP_small'] = map_train['map_small']
+            loss_log['train/mAP_medium'] = map_train['map_medium']
+            loss_log['train/mAP_large'] = map_train['map_large']
 
             wandb.log(loss_log)
 
@@ -227,6 +242,7 @@ def training_loop(name_train: str,
             torch.save(model.state_dict(), path_checkpoint)
         if total_loss < best_loss:
             increasing_loss = 0
+            best_loss = total_loss
             # Save model checkpoint    
             path_checkpoint = os.path.join('checkpoints', f'{name_train}_checkpoint.bin')
             torch.save(model.state_dict(), path_checkpoint)
@@ -254,7 +270,7 @@ def training_loop(name_train: str,
     loop_end = timer()
     time_loop = loop_end - loop_start
     if verbose:
-        print(f'Time for {num_epochs} epochs (s): {(time_loop):.3f}') 
+        print(f'Time for {epoch} epochs (s): {(time_loop):.3f}') 
 
 def evaluate_test(model: nn.Module,
           test_loader: utils.data.DataLoader,
@@ -311,17 +327,8 @@ def execute(name_train: str,
     scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     training_loop(name_train, num_epochs, optimizer, scheduler, 
-                               model, data_loader_train, 
-                               data_loader_val, device, log_wandb=log_wandb)
+                               model, data_loader_train, data_loader_val, 
+                               data_loader_test, device, log_wandb=log_wandb)
                                
-    # load best parameters
-    model.load_state_dict(torch.load('checkpoints/'+name_train+'_checkpoint.bin'))
-
-    map = evaluate_test(model, data_loader_test, device)
     if log_wandb:
-        wandb.log({'test/mAP': map['map'],
-                    'test/mAP_small': map['map_small'],
-                    'test/mAP_medium': map['map_medium'],
-                    'test/mAP_large': map['map_large'],})
-        print(map['map_per_class'])
         run.finish()
