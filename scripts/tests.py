@@ -79,7 +79,7 @@ model.to(device)
 
 name_train = "retina_resnet34"
 lr = 1e-4
-num_epochs = 1
+num_epochs = 50
 tags = ['RetinaNet','resnet34',]
 
 execute(name_train, model, lr, num_epochs, loader_train, loader_val, loader_test, device, tags, log_wandb=False)

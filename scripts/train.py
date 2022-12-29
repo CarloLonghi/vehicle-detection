@@ -65,7 +65,9 @@ class VDDataset(Dataset):
         self.classes = ['Bicycle', 'Motorbike', 'Car-Trailer', 'Car', 'Truck with Trailer', 'Miscellaneous', 'Truck', 'Pickup Truck', 'Van', 'Bus']
 
     def __getitem__(self, idx):
-        path_image = self.images[idx]
+        img_idx = idx // 4
+        crop_idx = idx % 4
+        path_image = self.images[img_idx]
         image = Image.open(os.path.join(self.img_dir, path_image)).convert("RGB")
         labels, boxes = get_image_annotations(path_image, self.label_file)
 
@@ -75,19 +77,42 @@ class VDDataset(Dataset):
         if self.transforms is not None:
             reduced_size = 100
             image = self.transforms(image)
-            x, y = get_random_crop(image, reduced_size)
-            image = image[:,x:x+reduced_size, y:y+reduced_size]
-            filters = [(b[0]>=x and b[0]<x+reduced_size and b[2]>=x and b[2]<x+reduced_size
-            and b[1]>=y and b[1]<y+reduced_size and b[3]>=y and b[3]<y+reduced_size) for b in boxes]
+            starting_x = image.shape[2] // 2 * (crop_idx % 2)
+            starting_y = image.shape[1] // 2 * (crop_idx // 2)
+            dim_x = image.shape[2] // 2 + 200
+            dim_y = image.shape[1] // 2 + 200
+            if crop_idx % 2 == 1:
+                starting_x -= 200
+            if crop_idx // 2 == 1:
+                starting_y -= 200
+            image = image[:, starting_y:starting_y+dim_y, starting_x:starting_x+dim_x]
+            filters = [(b[0]>=starting_x and b[0]<starting_x+dim_x and b[2]>=starting_x and b[2]<starting_x+dim_x
+            and b[1]>=starting_y and b[1]<starting_y+dim_y and b[3]>=starting_y and b[3]<starting_y+dim_y) for b in boxes]
             boxes = boxes[filters]
+            x1 = boxes[:,0] - starting_x
+            x2 = boxes[:,2] - starting_x
+            y1 = boxes[:,1] - starting_y
+            y2 = boxes[:,3] - starting_y
+            boxes = torch.stack((x1,y1,x2,y2), dim=1)
             labels = labels[filters]
+            # x, y = get_random_crop(image, reduced_size)
+            # image = image[:,x:x+reduced_size, y:y+reduced_size]
+            # filters = [(b[0]>=x and b[0]<x+reduced_size and b[2]>=x and b[2]<x+reduced_size
+            # and b[1]>=y and b[1]<y+reduced_size and b[3]>=y and b[3]<y+reduced_size) for b in boxes]
+            # boxes = boxes[filters]
+            # x1 = boxes[:,0] - x
+            # x2 = boxes[:,2] - x
+            # y1 = boxes[:,1] - y
+            # y2 = boxes[:,3] - y
+            # boxes = torch.stack((x1,y1,x2,y2), dim=1)
+            # labels = labels[filters]
 
         target = {"boxes": boxes, "labels": labels}
 
         return image, target
 
     def __len__(self):
-        return len(self.images)
+        return len(self.images) * 4
 
 def train(model: nn.Module,
           train_loader: utils.data.DataLoader,
