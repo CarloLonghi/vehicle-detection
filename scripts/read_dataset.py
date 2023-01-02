@@ -29,7 +29,7 @@ def convert_coco_json_to_csv(filename):
     val_ids, test_ids = train_test_split(val_ids, train_size=10)
 
     categories = {}
-    num_cat = 0
+    num_cat = 1
     for cat in s['categories']:
         categories[cat['id']] = num_cat
         num_cat += 1
