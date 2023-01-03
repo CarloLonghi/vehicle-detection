@@ -75,7 +75,6 @@ class VDDataset(Dataset):
         labels = torch.as_tensor(labels.values, dtype=torch.int64)
         
         if self.transforms is not None:
-            reduced_size = 100
             image = self.transforms(image)
             starting_x = image.shape[2] // 2 * (crop_idx % 2)
             starting_y = image.shape[1] // 2 * (crop_idx // 2)
@@ -95,17 +94,21 @@ class VDDataset(Dataset):
             y2 = boxes[:,3] - starting_y
             boxes = torch.stack((x1,y1,x2,y2), dim=1)
             labels = labels[filters]
-            # x, y = get_random_crop(image, reduced_size)
-            # image = image[:,x:x+reduced_size, y:y+reduced_size]
-            # filters = [(b[0]>=x and b[0]<x+reduced_size and b[2]>=x and b[2]<x+reduced_size
-            # and b[1]>=y and b[1]<y+reduced_size and b[3]>=y and b[3]<y+reduced_size) for b in boxes]
-            # boxes = boxes[filters]
-            # x1 = boxes[:,0] - x
-            # x2 = boxes[:,2] - x
-            # y1 = boxes[:,1] - y
-            # y2 = boxes[:,3] - y
-            # boxes = torch.stack((x1,y1,x2,y2), dim=1)
-            # labels = labels[filters]
+
+            # random flip
+            p_h = torch.rand(1)
+            if p_h > 0.5:
+                image = torch.flip(image, dims=[1,])
+                y3 = boxes[:,3].clone()
+                boxes[:,3] = dim_y - boxes[:,1]
+                boxes[:,1] = dim_y - y3
+            p_v = torch.rand(1)
+            if p_v > 0.5:
+                image = torch.flip(image, dims=[2,])
+                x2 = boxes[:,2].clone()
+                boxes[:,2] = dim_x - boxes[:,0]
+                boxes[:,0] = dim_x - x2
+
 
         target = {"boxes": boxes, "labels": labels}
 
@@ -221,7 +224,7 @@ def training_loop(name_train: str,
             the model trained 
     """    
     loop_start = timer()
-    best_loss = None
+    best_map = None
     increasing_loss = 0
     print("STARTING TRAINING")
     for epoch in range(1, num_epochs + 1):
@@ -233,8 +236,7 @@ def training_loop(name_train: str,
 
         train_loss = list(losses_epoch_train.values())
         val_loss = list(losses_epoch_val.values())
-        map_test = evaluate_test(model, loader_test, device)
-        map_train = evaluate_test(model, loader_train, device)
+        map_val = evaluate_test(model, loader_val, device)
 
         if log_wandb:
             loss_names = list(losses_epoch_train.keys())
@@ -243,31 +245,26 @@ def training_loop(name_train: str,
                 loss_log['train/'+name] = train_loss[i]
                 loss_log['val/'+name] = val_loss[i]
 
-            loss_log['test/mAP'] = map_test['map']
-            loss_log['test/mAP_small'] = map_test['map_small']
-            loss_log['test/mAP_medium'] = map_test['map_medium']
-            loss_log['test/mAP_large'] = map_test['map_large']
-            loss_log['test/mAR_small'] = map_test['mar_small']
-            loss_log['test/mAR_medium'] = map_test['mar_medium']
-            loss_log['test/mAR_large'] = map_test['mar_large']
-
-            loss_log['train/mAP'] = map_train['map']
-            loss_log['train/mAP_small'] = map_train['map_small']
-            loss_log['train/mAP_medium'] = map_train['map_medium']
-            loss_log['train/mAP_large'] = map_train['map_large']
+            loss_log['val/mAP'] = map_val['map']
+            loss_log['val/mAP_small'] = map_val['map_small']
+            loss_log['val/mAP_medium'] = map_val['map_medium']
+            loss_log['val/mAP_large'] = map_val['map_large']
+            loss_log['val/mAR_small'] = map_val['mar_small']
+            loss_log['val/mAR_medium'] = map_val['mar_medium']
+            loss_log['val/mAR_large'] = map_val['mar_large']
 
             wandb.log(loss_log)
 
-        total_loss = sum(val_loss)
-        if best_loss is None:
-            best_loss = total_loss
+        new_map = sum(val_loss)
+        if best_map is None:
+            best_map = new_map
             if not os.path.exists('checkpoints'):
                 os.makedirs('checkpoints')
             path_checkpoint = os.path.join('checkpoints', f'{name_train}_checkpoint.bin')
             torch.save(model.state_dict(), path_checkpoint)
-        if total_loss < best_loss:
+        if new_map > best_map:
             increasing_loss = 0
-            best_loss = total_loss
+            best_map = new_map
             # Save model checkpoint    
             path_checkpoint = os.path.join('checkpoints', f'{name_train}_checkpoint.bin')
             torch.save(model.state_dict(), path_checkpoint)
@@ -291,6 +288,19 @@ def training_loop(name_train: str,
         if increasing_loss >=5:
             print('Early Stopping')
             break
+
+    model.load_state_dict(torch.load(os.path.join('checkpoints', f'{name_train}_checkpoint.bin')))
+    map_test = evaluate_test(model, loader_test, device)
+    if log_wandb:
+        map_log = {}
+        map_log['test/mAP'] = map_test['map']
+        map_log['test/mAP_small'] = map_test['map_small']
+        map_log['test/mAP_medium'] = map_test['map_medium']
+        map_log['test/mAP_large'] = map_test['map_large']
+        map_log['test/mAR_small'] = map_test['mar_small']
+        map_log['test/mAR_medium'] = map_test['mar_medium']
+        map_log['test/mAR_large'] = map_test['mar_large']
+        wandb.log(map_log)
 
     loop_end = timer()
     time_loop = loop_end - loop_start
@@ -349,7 +359,7 @@ def execute(name_train: str,
     optimizer = optim.Adam(model.parameters(), lr=starting_lr)    
 
     # Learning Rate schedule 
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    scheduler = lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
     training_loop(name_train, num_epochs, optimizer, scheduler, 
                                model, data_loader_train, data_loader_val, 
