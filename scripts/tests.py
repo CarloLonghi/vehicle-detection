@@ -9,7 +9,7 @@ from train import execute
 device = "cpu"
 if torch.cuda.is_available:
   print('All good, a Gpu is available')
-  device = torch.device("cuda:0")  
+  device = torch.device("cuda:0")
 else:
   print('Please set GPU via Edit -> Notebook Settings.')
 
@@ -50,7 +50,7 @@ data_test = VDDataset(img_dir=img_path,
                             transforms=data_transforms['test'])
 
 classes = data_train.classes
-num_classes = len(classes)
+num_classes = len(classes) + 1
 num_workers = 1
 size_batch = 1
 
@@ -74,7 +74,7 @@ loader_test = torch.utils.data.DataLoader(data_test,
                                             collate_fn=collate_fn)
                                             
 
-model = models.retina_net(num_classes)
+model = models.fasterrcnn(num_classes)
 model.to(device)
 
 name_train = "retina_resnet34"
