@@ -1,0 +1,10 @@
+train: ../yolo_dataset/images/train/
+val: ../yolo_dataset/images/val/
+test: ../yolo_dataset/images/test/
+
+# number of classes
+nc: 10
+
+# class names
+names: ['Bicycle', 'Motorbike', 'Car-Trailer', 'Car', 'Truck with Trailer', 'Miscellaneous', 
+                'Truck', 'Pickup Truck', 'Van', 'Bus']

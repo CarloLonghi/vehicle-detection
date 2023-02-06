@@ -3,3 +3,8 @@ checkpoints
 wandb
 .vscode
 .venv
+images
+yolov5
+vedai
+yolo_dataset
+yolo_vedai

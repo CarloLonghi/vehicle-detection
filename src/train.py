@@ -48,6 +48,7 @@ class VDDataset(Dataset):
         img_files: List[str],
         label_file: str,
         transforms: torchvision.transforms = None,
+        training: bool = False,
     ) -> None:
         """Init the dataset
 
@@ -61,6 +62,7 @@ class VDDataset(Dataset):
         self.images = sorted(img_files)
         self.label_file = label_file
         self.transforms = transforms
+        self.training = training
 
         self.classes = ['Bicycle', 'Motorbike', 'Car-Trailer', 'Car', 'Truck with Trailer', 'Miscellaneous', 'Truck', 'Pickup Truck', 'Van', 'Bus']
 
@@ -95,19 +97,20 @@ class VDDataset(Dataset):
             boxes = torch.stack((x1,y1,x2,y2), dim=1)
             labels = labels[filters]
 
-            # random flip
-            p_h = torch.rand(1)
-            if p_h > 0.5:
-                image = torch.flip(image, dims=[1,])
-                y3 = boxes[:,3].clone()
-                boxes[:,3] = dim_y - boxes[:,1]
-                boxes[:,1] = dim_y - y3
-            p_v = torch.rand(1)
-            if p_v > 0.5:
-                image = torch.flip(image, dims=[2,])
-                x2 = boxes[:,2].clone()
-                boxes[:,2] = dim_x - boxes[:,0]
-                boxes[:,0] = dim_x - x2
+            if self.training:
+                # random flip
+                p_h = torch.rand(1)
+                if p_h > 0.5:
+                    image = torch.flip(image, dims=[1,])
+                    y3 = boxes[:,3].clone()
+                    boxes[:,3] = dim_y - boxes[:,1]
+                    boxes[:,1] = dim_y - y3
+                p_v = torch.rand(1)
+                if p_v > 0.5:
+                    image = torch.flip(image, dims=[2,])
+                    x2 = boxes[:,2].clone()
+                    boxes[:,2] = dim_x - boxes[:,0]
+                    boxes[:,0] = dim_x - x2
 
 
         target = {"boxes": boxes, "labels": labels}
@@ -116,6 +119,68 @@ class VDDataset(Dataset):
 
     def __len__(self):
         return len(self.images) * 4
+
+class VEDAIDataset(Dataset):
+    def __init__(
+        self,
+        img_dir: str,
+        img_files: List[str],
+        label_file: str,
+        transforms: torchvision.transforms = None,
+        training: bool = False,
+    ) -> None:
+        """Init the dataset
+
+        Args:
+            path_images: the path to the folder containing the images.
+            ext_images: the extension of the images.
+            ext_annotations: the extension of the annotations.
+            transforms: the transformation to apply to the dataset.
+        """
+        self.img_dir = img_dir
+        self.images = sorted(img_files)
+        self.label_file = label_file
+        self.transforms = transforms
+        self.training = training
+
+        self.classes = ['Bicycle', 'Motorbike', 'Car-Trailer', 'Car', 'Truck with Trailer', 'Miscellaneous', 'Truck', 'Pickup Truck', 'Van', 'Bus']
+
+    def __getitem__(self, idx):
+        path_image = self.images[idx]
+        image = Image.open(os.path.join(self.img_dir, path_image)).convert("RGB")
+        labels, boxes = get_image_annotations(path_image, self.label_file)
+
+        boxes = torch.as_tensor(boxes.values, dtype=torch.float32)
+        labels = torch.as_tensor(labels.values, dtype=torch.int64)
+        
+        if self.transforms is not None:
+            image = self.transforms(image)
+            dim_x = image.shape[2]
+            dim_y = image.shape[1]
+
+            if self.training:
+                # random flip
+                p_h = torch.rand(1)
+                if p_h > 0.5:
+                    image = torch.flip(image, dims=[1,])
+                    y3 = boxes[:,3].clone()
+                    boxes[:,3] = dim_y - boxes[:,1]
+                    boxes[:,1] = dim_y - y3
+                p_v = torch.rand(1)
+                if p_v > 0.5:
+                    image = torch.flip(image, dims=[2,])
+                    x2 = boxes[:,2].clone()
+                    boxes[:,2] = dim_x - boxes[:,0]
+                    boxes[:,0] = dim_x - x2
+
+
+        target = {"boxes": boxes, "labels": labels}
+
+        return image, target
+
+    def __len__(self):
+        return len(self.images)
+
 
 def train(model: nn.Module,
           train_loader: utils.data.DataLoader,
@@ -252,6 +317,7 @@ def training_loop(name_train: str,
             loss_log['val/mAR_small'] = map_val['mar_small']
             loss_log['val/mAR_medium'] = map_val['mar_medium']
             loss_log['val/mAR_large'] = map_val['mar_large']
+            loss_log['val/mAP_50'] = map_val['map_50']
 
             wandb.log(loss_log)
 
@@ -281,26 +347,25 @@ def training_loop(name_train: str,
                   f' Losses Train: {losses_epoch_train.items()} ' 
                   f' Losses Val: {losses_epoch_val.items()} '                  
                   f' Time one epoch (s): {(time_end - time_start):.4f} ')
-        
-        if lr_scheduler:            
-            lr_scheduler.step()
     
-        if increasing_loss >=5:
+        if increasing_loss >= 10:
             print('Early Stopping')
             break
 
-    model.load_state_dict(torch.load(os.path.join('checkpoints', f'{name_train}_checkpoint.bin')))
-    map_test = evaluate_test(model, loader_test, device)
-    if log_wandb:
-        map_log = {}
-        map_log['test/mAP'] = map_test['map']
-        map_log['test/mAP_small'] = map_test['map_small']
-        map_log['test/mAP_medium'] = map_test['map_medium']
-        map_log['test/mAP_large'] = map_test['map_large']
-        map_log['test/mAR_small'] = map_test['mar_small']
-        map_log['test/mAR_medium'] = map_test['mar_medium']
-        map_log['test/mAR_large'] = map_test['mar_large']
-        wandb.log(map_log)
+    if loader_test is not None:
+        model.load_state_dict(torch.load(os.path.join('checkpoints', f'{name_train}_checkpoint.bin')))
+        map_test = evaluate_test(model, loader_test, device)
+        if log_wandb:
+            map_log = {}
+            map_log['test/mAP'] = map_test['map']
+            map_log['test/mAP_small'] = map_test['map_small']
+            map_log['test/mAP_medium'] = map_test['map_medium']
+            map_log['test/mAP_large'] = map_test['map_large']
+            map_log['test/mAR_small'] = map_test['mar_small']
+            map_log['test/mAR_medium'] = map_test['mar_medium']
+            map_log['test/mAR_large'] = map_test['mar_large']
+            map_log['test/mAP_50'] = map_test['map_50']
+            wandb.log(map_log)
 
     loop_end = timer()
     time_loop = loop_end - loop_start

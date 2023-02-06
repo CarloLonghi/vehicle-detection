@@ -66,14 +66,12 @@ def draw_boxes(image: Image,
         painter.rectangle(coord_bb, outline=color, width=4)
         
         if add_text:            
-            class_obj = classes[i]
+            class_obj = classes[labels[i]]
             score = scores[i]
-            text_in_box = f'{class_obj}-{score:.2f}'
+            text_in_box = f'{class_obj}'
             text_bottom = y_max
             text_width, text_height = font.getsize(text_in_box)
             margin = np.ceil(0.05 * text_height)
-            painter.rectangle([(x_min, text_bottom - text_height - 2 * margin), 
-                               (x_min + text_width, text_bottom)], fill=color)
             
             painter.text((x_min + margin, text_bottom - text_height - margin), 
                          text_in_box, fill='black', font=font)

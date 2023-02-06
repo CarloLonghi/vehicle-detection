@@ -1,0 +1,8 @@
+train: ../yolo_vedai/images/train/
+val: ../yolo_vedai/images/val/
+
+# number of classes
+nc: 11
+
+# class names
+names: ['car', 'truck', 'pickup', 'tractor', 'camping car', 'boat', 'motorcycle', 'bus', 'van', 'other', 'small', 'large']

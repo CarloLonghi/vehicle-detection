@@ -10,16 +10,22 @@ from torchvision.utils import draw_bounding_boxes
 from torchvision.transforms.functional import to_pil_image
 import visualization
 from matplotlib import pyplot as plt
-from train import VDDataset
+from train import VDDataset, evaluate_test
 import pandas as pd
+from torchmetrics.detection.mean_ap import MeanAveragePrecision
+
+def collate_fn(batch):
+    return tuple(zip(*batch))
 
 def detect_objects(image: Image,
-                   detector: nn.Module, 
-                   threshold: float, 
-                   categories: List[str]) -> Tuple[List[List[int]], 
-                                                   List[float], 
-                                                   List[str], 
-                                                   List[int]]:
+                    target,
+                    device, 
+                    detector: nn.Module, 
+                    threshold: float, 
+                    categories: List[str]) -> Tuple[List[List[int]], 
+                                                    List[float], 
+                                                    List[str], 
+                                                    List[int]]:
     """Detects objects in the image using the provided detector. 
     This function puts the model in the eval mode.
 
@@ -36,10 +42,11 @@ def detect_objects(image: Image,
         The categories of the predicted objects.
     """
     detector.eval()
+    image = image.to(device)
     with torch.no_grad():
         predictions = detector([image])
         predictions = predictions[0]
-    
+
     # Get scores, boxes, and labels
     scores = predictions['scores'].detach().cpu().numpy()
     boxes = predictions['boxes'].detach().cpu().numpy()
@@ -59,8 +66,16 @@ def detect_objects(image: Image,
 
     return boxes_filtered, scores_filtered, categories_filtered, labels_filtered
 
-model = models.retina_net(10)
-model.load_state_dict(torch.load('checkpoints/retina_resnet34_10_epochs.bin'))
+device = "cpu"
+if torch.cuda.is_available:
+  print('All good, a Gpu is available')
+  device = torch.device("cuda:0")
+else:
+  print('Please set GPU via Edit -> Notebook Settings.')
+
+model = models.fasterrcnn(11)
+model.load_state_dict(torch.load('checkpoints/fasterrcnn_resnet50_checkpoint.bin'))
+model.to(device)
 
 # image = Image.open('dataset/images/Screenshot_2022-09-02_182050.jpg').convert("RGB")
 # totensor = torchvision.transforms.ToTensor()
@@ -68,25 +83,39 @@ model.load_state_dict(torch.load('checkpoints/retina_resnet34_10_epochs.bin'))
 # image = image[:,:800,:800]
 
 img_path = 'dataset/images'
-df = pd.read_csv('dataset/labels.csv')
-img_files = df['file'].unique()
-train_dataset, test_dataset = torch.utils.data.random_split(img_files, [70, 30])
-val_dataset, test_dataset = torch.utils.data.random_split(test_dataset, [10, 20])
-transforms = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
+dataset_path = 'dataset/'
+test_labels = dataset_path + 'test_labels.csv'
+df_test = pd.read_csv(test_labels)
+#df_test = df_test[df_test['label'] == 3]
+test_imgs = df_test['file'].unique()
+
+data_transforms = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
 data_test = VDDataset(img_dir=img_path,
-                            img_files=test_dataset,
-                            transforms=transforms)
+                            img_files=test_imgs,
+                            label_file=test_labels,
+                            transforms=data_transforms)
 
-image, target = data_test[0]
+loader_test = torch.utils.data.DataLoader(data_test,
+                                            batch_size=1,
+                                            shuffle=False,
+                                            num_workers=1,
+                                            collate_fn=collate_fn)
 
-threshold = 0.2
+image, target = data_test[1]
+# target['boxes'] = target['boxes'][target['labels']==3]
+# target['labels'] = target['labels'][target['labels']==3]
 
-categories = ['Car', 'Motorbike', 'Truck', 'Pickup Truck', 'Van', 'Truck with Trailer', 'Bus', 'Bicycle',
-            'Miscellaneous', 'Car-Trailer']
+threshold = 0.5
 
-boxes_filtered, scores_filtered, categories_filtered, labels_filtered = detect_objects(image, model, threshold, categories)
+categories = ['Background', 'Bicycle', 'Motorbike', 'Car-Trailer', 'Car', 'Truck with Trailer', 'Miscellaneous', 
+                'Truck', 'Pickup Truck', 'Van', 'Bus']
 
-colors = visualization.generate_colors(len(categories))
+#map = evaluate_test(model, loader_test, device)
+#print(map['map'], map['map_per_class'])
+
+boxes_filtered, scores_filtered, categories_filtered, labels_filtered = detect_objects(image, target, device, model, threshold, categories)
+
+colors = visualization.generate_colors(len(categories)+1)
 
 image_with_bb_pred = visualization.draw_boxes(
     torchvision.transforms.ToPILImage()(image),
@@ -96,7 +125,7 @@ image_with_bb_pred = visualization.draw_boxes(
     scores_filtered,
     colors,
     normalized_coordinates=False,
-    add_text=False
+    add_text=True
 )
 
 image_with_bb_gt = visualization.draw_boxes(
@@ -107,11 +136,10 @@ image_with_bb_gt = visualization.draw_boxes(
     [1.0] * len(target["boxes"]), 
     colors, 
     normalized_coordinates=False, 
-    add_text=False)   
+    add_text=True)   
 
 from matplotlib import rcParams
-rcParams['figure.figsize'] = 22, 16
-
+rcParams['figure.figsize'] = 30, 25
 
 f, axarr = plt.subplots(1, 2)
 axarr[0].imshow(image_with_bb_pred)
