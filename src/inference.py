@@ -74,19 +74,13 @@ else:
   print('Please set GPU via Edit -> Notebook Settings.')
 
 model = models.fasterrcnn(11)
-model.load_state_dict(torch.load('checkpoints/fasterrcnn_resnet50_checkpoint.bin'))
+model.load_state_dict(torch.load('checkpoints/fasterrcnn_resnet50_vedai_pretrained_checkpoint.bin'))
 model.to(device)
-
-# image = Image.open('dataset/images/Screenshot_2022-09-02_182050.jpg').convert("RGB")
-# totensor = torchvision.transforms.ToTensor()
-# image = totensor(image)
-# image = image[:,:800,:800]
 
 img_path = 'dataset/images'
 dataset_path = 'dataset/'
 test_labels = dataset_path + 'test_labels.csv'
 df_test = pd.read_csv(test_labels)
-#df_test = df_test[df_test['label'] == 3]
 test_imgs = df_test['file'].unique()
 
 data_transforms = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
@@ -102,16 +96,11 @@ loader_test = torch.utils.data.DataLoader(data_test,
                                             collate_fn=collate_fn)
 
 image, target = data_test[1]
-# target['boxes'] = target['boxes'][target['labels']==3]
-# target['labels'] = target['labels'][target['labels']==3]
 
 threshold = 0.5
 
 categories = ['Background', 'Bicycle', 'Motorbike', 'Car-Trailer', 'Car', 'Truck with Trailer', 'Miscellaneous', 
                 'Truck', 'Pickup Truck', 'Van', 'Bus']
-
-#map = evaluate_test(model, loader_test, device)
-#print(map['map'], map['map_per_class'])
 
 boxes_filtered, scores_filtered, categories_filtered, labels_filtered = detect_objects(image, target, device, model, threshold, categories)
 

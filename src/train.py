@@ -112,7 +112,6 @@ class VDDataset(Dataset):
                     boxes[:,2] = dim_x - boxes[:,0]
                     boxes[:,0] = dim_x - x2
 
-
         target = {"boxes": boxes, "labels": labels}
 
         return image, target
@@ -142,8 +141,8 @@ class VEDAIDataset(Dataset):
         self.label_file = label_file
         self.transforms = transforms
         self.training = training
+        self.classes = ['car', 'truck', 'pickup', 'tractor', 'camping car', 'boat', 'motorcycle', 'bus', 'van', 'other', 'small', 'large']
 
-        self.classes = ['Bicycle', 'Motorbike', 'Car-Trailer', 'Car', 'Truck with Trailer', 'Miscellaneous', 'Truck', 'Pickup Truck', 'Van', 'Bus']
 
     def __getitem__(self, idx):
         path_image = self.images[idx]
@@ -301,7 +300,7 @@ def training_loop(name_train: str,
 
         train_loss = list(losses_epoch_train.values())
         val_loss = list(losses_epoch_val.values())
-        map_val = evaluate_test(model, loader_val, device)
+        map_test = evaluate_test(model, loader_val, device)
 
         if log_wandb:
             loss_names = list(losses_epoch_train.keys())
@@ -310,29 +309,32 @@ def training_loop(name_train: str,
                 loss_log['train/'+name] = train_loss[i]
                 loss_log['val/'+name] = val_loss[i]
 
-            loss_log['val/mAP'] = map_val['map']
-            loss_log['val/mAP_small'] = map_val['map_small']
-            loss_log['val/mAP_medium'] = map_val['map_medium']
-            loss_log['val/mAP_large'] = map_val['map_large']
-            loss_log['val/mAR_small'] = map_val['mar_small']
-            loss_log['val/mAR_medium'] = map_val['mar_medium']
-            loss_log['val/mAR_large'] = map_val['mar_large']
-            loss_log['val/mAP_50'] = map_val['map_50']
+            loss_log['val/mAP'] = map_test['map']
+            loss_log['val/mAP_small'] = map_test['map_small']
+            loss_log['val/mAP_medium'] = map_test['map_medium']
+            loss_log['val/mAP_large'] = map_test['map_large']
+            loss_log['val/mAR_small'] = map_test['mar_small']
+            loss_log['val/mAR_medium'] = map_test['mar_medium']
+            loss_log['val/mAR_large'] = map_test['mar_large']
+            loss_log['val/mAP_50'] = map_test['map_50']
+            map_class = map_test['map_per_class']
+            for i, m in enumerate(map_class):
+              loss_log['val/mAP_class_'+str(i)] = m
 
             wandb.log(loss_log)
 
-        new_map = sum(val_loss)
+        total_map = map_test['map']
         if best_map is None:
-            best_map = new_map
-            if not os.path.exists('checkpoints'):
-                os.makedirs('checkpoints')
-            path_checkpoint = os.path.join('checkpoints', f'{name_train}_checkpoint.bin')
+            best_map = total_map
+            if not os.path.exists('drive/MyDrive/vehicle_detection/checkpoints'):
+                os.makedirs('drive/MyDrive/vehicle_detection/checkpoints')
+            path_checkpoint = os.path.join('drive/MyDrive/vehicle_detection/checkpoints', f'{name_train}_checkpoint.bin')
             torch.save(model.state_dict(), path_checkpoint)
-        if new_map > best_map:
+        if total_map > best_map:
             increasing_loss = 0
-            best_map = new_map
+            best_map = total_map
             # Save model checkpoint    
-            path_checkpoint = os.path.join('checkpoints', f'{name_train}_checkpoint.bin')
+            path_checkpoint = os.path.join('drive/MyDrive/vehicle_detection/checkpoints', f'{name_train}_checkpoint.bin')
             torch.save(model.state_dict(), path_checkpoint)
         else:
             increasing_loss += 1
@@ -348,27 +350,32 @@ def training_loop(name_train: str,
                   f' Losses Val: {losses_epoch_val.items()} '                  
                   f' Time one epoch (s): {(time_end - time_start):.4f} ')
     
-        if increasing_loss >= 10:
+        if increasing_loss >= 20:
             print('Early Stopping')
             break
 
     if loader_test is not None:
-        model.load_state_dict(torch.load(os.path.join('checkpoints', f'{name_train}_checkpoint.bin')))
-        map_test = evaluate_test(model, loader_test, device)
-        if log_wandb:
-            map_log = {}
-            map_log['test/mAP'] = map_test['map']
-            map_log['test/mAP_small'] = map_test['map_small']
-            map_log['test/mAP_medium'] = map_test['map_medium']
-            map_log['test/mAP_large'] = map_test['map_large']
-            map_log['test/mAR_small'] = map_test['mar_small']
-            map_log['test/mAR_medium'] = map_test['mar_medium']
-            map_log['test/mAR_large'] = map_test['mar_large']
-            map_log['test/mAP_50'] = map_test['map_50']
-            wandb.log(map_log)
+      model.load_state_dict(torch.load(os.path.join('drive/MyDrive/vehicle_detection/checkpoints', f'{name_train}_checkpoint.bin')))
+      map_test = evaluate_test(model, loader_test, device)
+      print(map_test['map_per_class'])
+      if log_wandb:
+          map_log = {}
+          map_log['test/mAP'] = map_test['map']
+          map_log['test/mAP_small'] = map_test['map_small']
+          map_log['test/mAP_medium'] = map_test['map_medium']
+          map_log['test/mAP_large'] = map_test['map_large']
+          map_log['test/mAR_small'] = map_test['mar_small']
+          map_log['test/mAR_medium'] = map_test['mar_medium']
+          map_log['test/mAR_large'] = map_test['mar_large']
+          map_log['test/mAP_50'] = map_test['map_50']
+          map_class = map_test['map_per_class']
+          for i, m in enumerate(map_class):
+            map_log['test/mAP_class_'+str(i)] = m
+          wandb.log(map_log)
 
     loop_end = timer()
     time_loop = loop_end - loop_start
+
     if verbose:
         print(f'Time for {epoch} epochs (s): {(time_loop):.3f}') 
 
@@ -416,6 +423,7 @@ def execute(name_train: str,
         wandb.define_metric('test/mAP_medium', summary='max')
         wandb.define_metric('test/mAP_large', summary='max')
         wandb.define_metric('test/mAP_class', summary='max')
+        wandb.define_metric('test/mAP_50', summary='max')
         wandb.watch(model)
 
     fix_random(42)
